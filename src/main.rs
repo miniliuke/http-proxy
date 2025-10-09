@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use clap::Parser;
 use flate2::{GzBuilder, write::GzEncoder};
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
 use http_proxy::compress::{Compressor, Decompressor, Encode};
+use http_proxy::config::{self, Config};
 use pingora::{
     Result,
     http::{RequestHeader, ResponseHeader},
@@ -14,11 +16,14 @@ use std::{env, sync::Arc};
 
 fn main() {
     env_logger::init();
-    let opt = Opt::parse_args();
+    let config = Config::parse();
+    let opt = Opt::default();
     let mut my_server = Server::new(Some(opt)).unwrap();
     my_server.bootstrap();
-    let mut my_proxy = pingora::proxy::http_proxy_service(&Arc::new(Default::default()), Proxy0());
-    my_proxy.add_tcp("0.0.0.0:7070");
+    let mut my_proxy = pingora::proxy::http_proxy_service(&Arc::new(Default::default()), Proxy0 { config: config.clone() });
+    my_proxy.add_tcp(&format!(
+        "0.0.0.0:{}", config.port
+    ));
     my_server.add_service(my_proxy);
     my_server.run_forever();
 }
@@ -35,7 +40,9 @@ pub enum Op {
     Decompress,
 }
 
-pub struct Proxy0();
+pub struct Proxy0 {
+    config: Config,
+}
 
 #[async_trait]
 impl ProxyHttp for Proxy0 {
@@ -55,7 +62,7 @@ impl ProxyHttp for Proxy0 {
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
         Ok(Box::new(HttpPeer::new(
-            "54.209.231.157:80",
+            &self.config.target,
             false,
             "one".to_string(),
         )))
@@ -65,7 +72,7 @@ impl ProxyHttp for Proxy0 {
     where
         Self::CTX: Send + Sync,
     {
-        println!("Header:{:?}", session.as_downstream().req_header());
+        // println!("Header:{:?}", session.as_downstream().req_header());
         Ok(false)
     }
 
@@ -81,20 +88,22 @@ impl ProxyHttp for Proxy0 {
         if let None = upstream_request.headers.get(CONTENT_ENCODING) {
             ctx.op = Op::Compress;
             ctx.compressor = Some(Compressor::new(3));
-            upstream_request.remove_header(&CONTENT_LENGTH);
+            if let Some(cl) = upstream_request.remove_header(&CONTENT_LENGTH) {
+                upstream_request.insert_header("crd-content-length", cl);
+            }
             upstream_request.insert_header(CONTENT_ENCODING, "gzip");
             upstream_request.insert_header(TRANSFER_ENCODING, "Chunked");
-            println!("ss:{:?}", upstream_request.headers.iter());
         } else {
             ctx.op = Op::Decompress;
             ctx.decompressor = Some(Decompressor::new());
             upstream_request.insert_header(ACCEPT_ENCODING, "gzip");
+            if let Some(cl) = upstream_request.headers.get("crd-content-length") {
+                upstream_request.insert_header(CONTENT_LENGTH, cl.clone());
+                upstream_request.remove_header(&TRANSFER_ENCODING);
+            }
         }
-        // session
-        //     .upstream_compression
-        //     .request_filter(upstream_request);
+
         session.upstream_compression.adjust_decompression(true);
-        println!("Compress:{:?}", session.upstream_compression.is_enabled());
         Ok(())
     }
 
@@ -115,9 +124,6 @@ impl ProxyHttp for Proxy0 {
                 &[]
             };
             *body = Some(compresser.encode(data, end)?);
-            if let Some(c) = body.as_ref() {
-                println!("data1 len:{}", c.len());
-            }
         }
 
         // let data = if let Some(b) = body.as_ref() {
@@ -132,11 +138,7 @@ impl ProxyHttp for Proxy0 {
             } else {
                 &[]
             };
-            println!("data len:{}", data.len());
             *body = Some(decompressor.encode(data, end)?);
-            if let Some(c) = body.as_ref() {
-                println!("data2 len:{}", c.len());
-            }
         }
         Ok(())
     }
