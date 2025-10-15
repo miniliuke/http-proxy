@@ -95,7 +95,7 @@ impl<S> Layer<S> for ProxyLayer {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 256)]
 async fn main() {
     let config = Config::parse();
     let cfg = Arc::new(config.clone());
