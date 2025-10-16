@@ -152,9 +152,11 @@ async fn fetch_url(
     }
 
     let req0 = if req.headers().contains_key(CUSTOM_ENCODING_HEADER) {
+        req_builder.headers_mut().unwrap().remove(CONTENT_ENCODING);
         req_builder.headers_mut().unwrap().remove(CUSTOM_ENCODING_HEADER);
         if let Some(length) = req_builder.headers_mut().unwrap().remove(CUSTOM_LENGTH) {
             req_builder = req_builder.header(CONTENT_LENGTH, length);
+            
         }
         req_builder.body(decompress_body(req.into_body()))?
     } else {
