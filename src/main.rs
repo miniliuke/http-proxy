@@ -3,8 +3,9 @@ use bytes::Bytes;
 use clap::Parser;
 use flate2::{GzBuilder, write::GzEncoder};
 use http::header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
-use http_proxy::compress::{Compressor, Decompressor, Encode};
+use http_proxy::compress::{Compressor, Decompressor, Encode, ZstdCompressor, ZstdDecompressor};
 use http_proxy::config::{self, Config};
+use pingora::server::configuration::ServerConf;
 use pingora::{
     Result,
     http::{RequestHeader, ResponseHeader},
@@ -12,26 +13,71 @@ use pingora::{
     proxy::{ProxyHttp, Session},
     server::Server,
 };
+use std::fs::File;
+use std::io::Write;
 use std::{env, sync::Arc};
 
 fn main() {
     env_logger::init();
+    let server_conf = ServerConf {
+        threads: 128,
+        listener_tasks_per_fd: 2,
+        ..Default::default()
+    };
+
     let config = Config::parse();
-    let opt = Opt::default();
+    let mut opt = Opt::default();
+    if let Ok(mut file) = File::create("config.yaml") {
+        let _ = file.write_all(server_conf.to_yaml().as_bytes());
+        let _ = file.flush();
+    }
+    opt.conf = Some("config.yaml".to_string());
     let mut my_server = Server::new(Some(opt)).unwrap();
     my_server.bootstrap();
-    let mut my_proxy = pingora::proxy::http_proxy_service(&Arc::new(Default::default()), Proxy0 { config: config.clone() });
-    my_proxy.add_tcp(&format!(
-        "0.0.0.0:{}", config.port
-    ));
+    let mut my_proxy = pingora::proxy::http_proxy_service(
+        &Arc::new(server_conf),
+        Proxy0 {
+            config: config.clone(),
+            zstd: true,
+        },
+    );
+    my_proxy.add_tcp(&format!("0.0.0.0:{}", config.port));
     my_server.add_service(my_proxy);
     my_server.run_forever();
 }
 
+pub enum Compreessor0 {
+    Gzip(Compressor),
+    Zstd(ZstdCompressor),
+}
+
+impl Compreessor0 {
+    fn encode(&mut self, input: &[u8], end: bool) -> Result<Bytes> {
+        match self {
+            Compreessor0::Gzip(compressor) => compressor.encode(input, end),
+            Compreessor0::Zstd(zstd_compressor) => zstd_compressor.encode(input, end),
+        }
+    }
+}
+
+pub enum Decompreessor0 {
+    Gzip(Decompressor),
+    Zstd(ZstdDecompressor),
+}
+
+impl Decompreessor0 {
+    fn encode(&mut self, input: &[u8], end: bool) -> Result<Bytes> {
+        match self {
+            Decompreessor0::Gzip(compressor) => compressor.encode(input, end),
+            Decompreessor0::Zstd(zstd_compressor) => zstd_compressor.encode(input, end),
+        }
+    }
+}
+
 pub struct ProxyCtx {
     op: Op,
-    compressor: Option<Compressor>,
-    decompressor: Option<Decompressor>,
+    compressor: Option<Compreessor0>,
+    decompressor: Option<Decompreessor0>,
 }
 
 pub enum Op {
@@ -42,6 +88,7 @@ pub enum Op {
 
 pub struct Proxy0 {
     config: Config,
+    zstd: bool,
 }
 
 #[async_trait]
@@ -87,16 +134,29 @@ impl ProxyHttp for Proxy0 {
     {
         if let None = upstream_request.headers.get(CONTENT_ENCODING) {
             ctx.op = Op::Compress;
-            ctx.compressor = Some(Compressor::new(3));
+
             if let Some(cl) = upstream_request.remove_header(&CONTENT_LENGTH) {
                 upstream_request.insert_header("crd-content-length", cl);
             }
-            upstream_request.insert_header(CONTENT_ENCODING, "gzip");
+            if self.zstd {
+                upstream_request.insert_header(CONTENT_ENCODING, "zstd");
+                ctx.compressor = Some(Compreessor0::Zstd(ZstdCompressor::new(6)));
+            } else {
+                upstream_request.insert_header(CONTENT_ENCODING, "gzip");
+                ctx.compressor = Some(Compreessor0::Gzip(Compressor::new(6)));
+            }
+
             upstream_request.insert_header(TRANSFER_ENCODING, "Chunked");
         } else {
             ctx.op = Op::Decompress;
-            ctx.decompressor = Some(Decompressor::new());
-            upstream_request.insert_header(ACCEPT_ENCODING, "gzip");
+            if self.zstd {
+                ctx.decompressor = Some(Decompreessor0::Zstd(ZstdDecompressor::new()));
+                upstream_request.insert_header(ACCEPT_ENCODING, "zstd");
+            } else {
+                ctx.decompressor = Some(Decompreessor0::Gzip(Decompressor::new()));
+                upstream_request.insert_header(ACCEPT_ENCODING, "gzip");
+            }
+
             if let Some(cl) = upstream_request.headers.get("crd-content-length") {
                 upstream_request.insert_header(CONTENT_LENGTH, cl.clone());
                 upstream_request.remove_header(&TRANSFER_ENCODING);
@@ -126,12 +186,6 @@ impl ProxyHttp for Proxy0 {
             *body = Some(compresser.encode(data, end)?);
         }
 
-        // let data = if let Some(b) = body.as_ref() {
-        //     b.as_ref()
-        // } else {
-        //     &[]
-        // };
-        // println!("data len:{:?}, {:?}", data, String::from_utf8_lossy(data));
         if let Some(decompressor) = ctx.decompressor.as_mut() {
             let data = if let Some(b) = body.as_ref() {
                 b.as_ref()
@@ -143,26 +197,12 @@ impl ProxyHttp for Proxy0 {
         Ok(())
     }
 
-    // fn upstream_response_filter(
-    //     &self,
-    //     session: &mut Session,
-    //     _upstream_response: &mut ResponseHeader,
-    //     _ctx: &mut Self::CTX,
-    // ) -> Result<()> {
-
-    //     Ok(())
-    // }
-
     fn upstream_response_filter(
         &self,
         session: &mut Session,
         upstream_response: &mut ResponseHeader,
         _ctx: &mut Self::CTX,
     ) -> Result<()> {
-        // println!("upstream_response_filter");
-        // session
-        //     .upstream_compression
-        //     .response_header_filter(upstream_response, false);
         Ok(())
     }
 
@@ -173,13 +213,6 @@ impl ProxyHttp for Proxy0 {
         end_of_stream: bool,
         _ctx: &mut Self::CTX,
     ) -> Result<()> {
-        // println!("upstream_response_body_filter");
-        // println!("Compress:{:?}", session.upstream_compression.is_enabled());
-        // println!("body:{:?}", body);
-        // *body = session
-        //     .upstream_compression
-        //     .response_body_filter(body.as_ref(), end_of_stream);
-        // println!("body1:{:?}", body);
         Ok(())
     }
 

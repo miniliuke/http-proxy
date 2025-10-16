@@ -153,6 +153,96 @@ impl DerefMut for Compressor {
     }
 }
 
+// ====================== ZSTD Compressor ======================
+
+pub struct ZstdCompressor {
+    compress: zstd::stream::write::Encoder<'static, Vec<u8>>,
+    total_in: usize,
+    total_out: usize,
+    duration: Duration,
+}
+
+impl ZstdCompressor {
+    pub fn new(level: i32) -> Self {
+        let buf = Vec::new();
+        let encoder = zstd::stream::write::Encoder::new(buf, level).unwrap();
+        Self {
+            compress: encoder,
+            total_in: 0,
+            total_out: 0,
+            duration: Duration::new(0, 0),
+        }
+    }
+}
+
+impl Encode for ZstdCompressor {
+    fn encode(&mut self, input: &[u8], end: bool) -> Result<Bytes> {
+        let start = Instant::now();
+        self.total_in += input.len();
+        self.compress
+            .get_mut()
+            .reserve(std::cmp::min(16 * 1024, input.len()));
+        self.compress.write_all(input).unwrap();
+        if end {
+            self.compress
+                .do_finish()
+                .unwrap();
+        }
+        self.total_out += self.compress.get_ref().len();
+        self.duration += start.elapsed();
+        Ok(std::mem::take(self.compress.get_mut()).into())
+    }
+
+    fn stat(&self) -> (&'static str, usize, usize, Duration) {
+        ("zstd", self.total_in, self.total_out, self.duration)
+    }
+}
+
+// ====================== ZSTD Decompressor ======================
+
+pub struct ZstdDecompressor {
+    decompress: zstd::stream::write::Decoder<'static, Vec<u8>>,
+    total_in: usize,
+    total_out: usize,
+    duration: Duration,
+}
+
+impl ZstdDecompressor {
+    pub fn new() -> Self {
+        // Vec<u8> 作为输出缓冲
+        let buf = Vec::new();
+        let decoder = zstd::stream::write::Decoder::new(buf).unwrap();
+        Self {
+            decompress: decoder,
+            total_in: 0,
+            total_out: 0,
+            duration: Duration::new(0, 0),
+        }
+    }
+}
+
+impl Encode for ZstdDecompressor {
+    fn encode(&mut self, input: &[u8], end: bool) -> Result<Bytes> {
+        let start = Instant::now();
+        self.total_in += input.len();
+        self.decompress.get_mut().reserve(input.len() * 2);
+        self.decompress
+            .write_all(input)
+            .or_err(COMPRESSION_ERROR, "while decompress Zstd")?;
+        if end {
+            self.decompress
+                .flush().unwrap();
+        }
+        self.total_out += self.decompress.get_ref().len();
+        self.duration += start.elapsed();
+        Ok(std::mem::take(self.decompress.get_mut()).into())
+    }
+
+    fn stat(&self) -> (&'static str, usize, usize, Duration) {
+        ("de-zstd", self.total_in, self.total_out, self.duration)
+    }
+}
+
 #[cfg(test)]
 mod tests_stream {
     use super::*;
