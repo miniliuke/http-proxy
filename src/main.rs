@@ -1,4 +1,7 @@
-use async_compression::{ tokio::bufread::{GzipDecoder, GzipEncoder}, Level};
+use async_compression::{
+    Level,
+    tokio::bufread::{GzipDecoder, GzipEncoder},
+};
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -9,8 +12,9 @@ use clap::Parser;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http_body_util::BodyExt;
 use http_proxy::config::Config;
-use hyper::header::{CONTENT_ENCODING, CONTENT_LENGTH};
+use hyper::header::{CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
 use hyper_util::rt::TokioIo;
+use mimalloc::MiMalloc;
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -26,11 +30,12 @@ use tokio::sync::RwLock;
 use tokio::{io::BufReader, net::TcpStream};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tower::{Layer, Service};
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 const CUSTOM_ENCODING_HEADER: &str = "crd-custom-encoding";
 const CUSTOM_LENGTH: &str = "crd-custom-length";
 const CUSTOM_ENCODING_VALUE: &str = "gzip";
-
 
 #[derive(Clone)]
 struct ProxyService {
@@ -81,7 +86,6 @@ fn build_upstream_uri(base: &str, original_uri: &Uri) -> Uri {
     new_uri_str.parse().expect("failed to build upstream uri")
 }
 
-
 #[derive(Clone)]
 struct ProxyLayer {
     config: Arc<Config>,
@@ -120,6 +124,52 @@ fn compress_body(body: Body) -> Body {
     Body::from_stream(compressed_stream)
 }
 
+pub fn maybe_compress_body(req_method: &http::Method, body: Body) -> Body {
+    match *req_method {
+        http::Method::POST | http::Method::PUT | http::Method::PATCH => {
+            // 将 Body 转成流，再用 GzipEncoder 压缩
+            let stream = TryStreamExt::map_err(body.into_data_stream(), |e| {
+                io::Error::new(io::ErrorKind::Other, e)
+            });
+
+            let reader = StreamReader::new(stream);
+            let buf_reader = BufReader::new(reader);
+            let gzip = GzipEncoder::with_quality(buf_reader, Level::Precise(6));
+            let compressed_stream = ReaderStream::new(gzip).map_ok(Bytes::from);
+
+            Body::from_stream(compressed_stream)
+        }
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => {
+            // 不压缩，直接返回原 body
+            body
+        }
+        _ => {
+            // 其他方法默认不压缩
+            body
+        }
+    }
+}
+
+pub fn maybe_decompress_body(req_method: &http::Method, body: Body) -> Body {
+    match *req_method {
+        http::Method::POST | http::Method::PUT | http::Method::PATCH => {
+            let stream = TryStreamExt::map_err(body.into_data_stream(), |e| {
+                io::Error::new(io::ErrorKind::Other, e)
+            });
+            let reader = StreamReader::new(stream);
+            let buf_reader = BufReader::new(reader);
+            let gzip = GzipDecoder::new(buf_reader);
+            let decompressed_stream = ReaderStream::new(gzip).map_ok(Bytes::from);
+            Body::from_stream(decompressed_stream)
+        }
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => {
+            body
+        }
+        _ => {
+            body
+        }
+    }
+}
 fn decompress_body(body: Body) -> Body {
     let stream = TryStreamExt::map_err(body.into_data_stream(), |e| {
         io::Error::new(io::ErrorKind::Other, e)
@@ -144,8 +194,8 @@ async fn fetch_url(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
     tokio::task::spawn(async move { if let Err(_) = conn.await {} });
 
-    let path = url.path();
-    let mut req_builder = Request::builder().uri(path);
+   let mut req_builder = Request::builder().uri(url.path_and_query().unwrap().as_str());
+   req_builder = req_builder.method(req.method());
 
     for (k, v) in req.headers().iter() {
         req_builder = req_builder.header(k, v);
@@ -153,27 +203,38 @@ async fn fetch_url(
 
     let req0 = if req.headers().contains_key(CUSTOM_ENCODING_HEADER) {
         req_builder.headers_mut().unwrap().remove(CONTENT_ENCODING);
-        req_builder.headers_mut().unwrap().remove(CUSTOM_ENCODING_HEADER);
+        req_builder
+            .headers_mut()
+            .unwrap()
+            .remove(CUSTOM_ENCODING_HEADER);
+        req_builder.headers_mut().unwrap().remove(TRANSFER_ENCODING);
         if let Some(length) = req_builder.headers_mut().unwrap().remove(CUSTOM_LENGTH) {
             req_builder = req_builder.header(CONTENT_LENGTH, length);
-            
         }
-        req_builder.body(decompress_body(req.into_body()))?
+        req_builder.body(maybe_decompress_body(&req.method().clone(), req.into_body()))?
     } else {
-        req_builder = req_builder.header(CUSTOM_ENCODING_HEADER, CUSTOM_ENCODING_VALUE)
-        .header(CONTENT_ENCODING, CUSTOM_ENCODING_VALUE);
+        req_builder = req_builder
+            .header(CUSTOM_ENCODING_HEADER, CUSTOM_ENCODING_VALUE)
+            .header(CONTENT_ENCODING, CUSTOM_ENCODING_VALUE);
         if let Some(length) = req_builder.headers_mut().unwrap().remove(CONTENT_LENGTH) {
             req_builder = req_builder.header(CUSTOM_LENGTH, length);
         }
-        req_builder.body(compress_body(req.into_body()))?
+        // println!("headers:{:?}", req.headers());
+        let req2: Request<Body> =
+            req_builder.body(maybe_compress_body(&req.method().clone(), req.into_body()))?;
+        // println!("req:{:?}", req2);
+        req2
     };
 
     let mut res = sender.send_request(req0).await?;
+    // println!("resp headers:{:?}", res.headers());
+    // let mut axum_resp = axum::response::Response::builder().status(res.status());
+    // for (k, v) in res.headers().iter() {
+    //     axum_resp = axum_resp.header(k, v);
+    // }
+    let (parts, body_stream) = res.into_parts();
+    let body = Body::from_stream(body_stream.into_data_stream());
+    let axum_resp = axum::response::Response::from_parts(parts, body);
 
-    let mut axum_resp = axum::response::Response::builder().status(res.status());
-    for (k, v) in res.headers().iter() {
-        axum_resp = axum_resp.header(k, v);
-    }
-
-    Ok(axum_resp.body(Body::from_stream(res.into_data_stream()))?)
+    Ok(axum_resp)
 }
