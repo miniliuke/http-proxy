@@ -1,6 +1,6 @@
 use async_compression::{
     Level,
-    tokio::bufread::{GzipDecoder, GzipEncoder},
+    tokio::bufread::{GzipDecoder, GzipEncoder, ZstdDecoder, ZstdEncoder},
 };
 use axum::{
     Router,
@@ -17,13 +17,7 @@ use hyper_util::rt::TokioIo;
 use mimalloc::MiMalloc;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
-    convert::Infallible,
-    io,
-    net::SocketAddr,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
+    collections::HashMap, convert::Infallible, io, net::SocketAddr, ops::RangeTo, pin::Pin, sync::Arc, task::{Context, Poll}
 };
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::RwLock;
@@ -35,16 +29,23 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 const CUSTOM_ENCODING_HEADER: &str = "crd-custom-encoding";
 const CUSTOM_LENGTH: &str = "crd-custom-length";
-const CUSTOM_ENCODING_VALUE: &str = "gzip";
+const CUSTOM_ENCODING_VALUE: &str = "zstd";
 
 #[derive(Clone)]
 struct ProxyService {
     config: Arc<Config>,
+    targets: Vec<String>,
 }
 
 impl ProxyService {
     fn new(config: Arc<Config>) -> Self {
-        Self { config }
+        let targets = config
+            .target
+            .split(",")
+            .map(|target| target.to_string())
+            .collect::<Vec<String>>();
+
+        Self { config, targets }
     }
 }
 
@@ -59,7 +60,10 @@ impl Service<Request<Body>> for ProxyService {
     }
 
     fn call(&mut self, mut req: Request<Body>) -> Self::Future {
-        let uri = build_upstream_uri(&self.config.target, req.uri());
+        let uri = build_upstream_uri(
+            &self.targets[rand::random_range(0..self.targets.len())],
+            req.uri(),
+        );
         Box::pin(async move { Ok(fetch_url(uri, req).await.unwrap()) })
     }
 }
@@ -134,8 +138,9 @@ pub fn maybe_compress_body(req_method: &http::Method, body: Body) -> Body {
 
             let reader = StreamReader::new(stream);
             let buf_reader = BufReader::new(reader);
-            let gzip = GzipEncoder::with_quality(buf_reader, Level::Precise(6));
-            let compressed_stream = ReaderStream::new(gzip).map_ok(Bytes::from);
+            let encoder = ZstdEncoder::with_quality(buf_reader, Level::Precise(6));
+            // let gzip = GzipEncoder::with_quality(buf_reader, Level::Precise(6));
+            let compressed_stream = ReaderStream::new(encoder).map_ok(Bytes::from);
 
             Body::from_stream(compressed_stream)
         }
@@ -158,16 +163,13 @@ pub fn maybe_decompress_body(req_method: &http::Method, body: Body) -> Body {
             });
             let reader = StreamReader::new(stream);
             let buf_reader = BufReader::new(reader);
-            let gzip = GzipDecoder::new(buf_reader);
-            let decompressed_stream = ReaderStream::new(gzip).map_ok(Bytes::from);
+            let decoder = ZstdDecoder::new(buf_reader);
+            // let gzip = GzipDecoder::new(buf_reader);
+            let decompressed_stream = ReaderStream::new(decoder).map_ok(Bytes::from);
             Body::from_stream(decompressed_stream)
         }
-        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => {
-            body
-        }
-        _ => {
-            body
-        }
+        http::Method::GET | http::Method::HEAD | http::Method::OPTIONS => body,
+        _ => body,
     }
 }
 fn decompress_body(body: Body) -> Body {
@@ -194,8 +196,8 @@ async fn fetch_url(
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
     tokio::task::spawn(async move { if let Err(_) = conn.await {} });
 
-   let mut req_builder = Request::builder().uri(url.path_and_query().unwrap().as_str());
-   req_builder = req_builder.method(req.method());
+    let mut req_builder = Request::builder().uri(url.path_and_query().unwrap().as_str());
+    req_builder = req_builder.method(req.method());
 
     for (k, v) in req.headers().iter() {
         req_builder = req_builder.header(k, v);
@@ -211,7 +213,10 @@ async fn fetch_url(
         if let Some(length) = req_builder.headers_mut().unwrap().remove(CUSTOM_LENGTH) {
             req_builder = req_builder.header(CONTENT_LENGTH, length);
         }
-        req_builder.body(maybe_decompress_body(&req.method().clone(), req.into_body()))?
+        req_builder.body(maybe_decompress_body(
+            &req.method().clone(),
+            req.into_body(),
+        ))?
     } else {
         req_builder = req_builder
             .header(CUSTOM_ENCODING_HEADER, CUSTOM_ENCODING_VALUE)
