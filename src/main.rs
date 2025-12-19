@@ -11,16 +11,38 @@ use bytes::BytesMut;
 use clap::Parser;
 use futures_util::{Stream, StreamExt, TryStreamExt};
 use http_body_util::BodyExt;
-use http_proxy::config::Config;
+use http_proxy::{config::Config, error::ProxyError};
 use hyper::header::{CONTENT_ENCODING, CONTENT_LENGTH, TRANSFER_ENCODING};
 use hyper_util::rt::TokioIo;
+use log::LevelFilter;
+use log4rs::{
+    append::{
+        console::ConsoleAppender,
+        rolling_file::{
+            RollingFileAppender,
+            policy::compound::{
+                CompoundPolicy, roll::fixed_window::FixedWindowRoller, trigger::size::SizeTrigger,
+            },
+        },
+    },
+    config::{Appender, Root},
+    encode::pattern::PatternEncoder,
+};
 use mimalloc::MiMalloc;
 use serde::Deserialize;
 use std::{
-    collections::HashMap, convert::Infallible, io, net::SocketAddr, ops::RangeTo, pin::Pin, sync::Arc, task::{Context, Poll}
+    collections::HashMap,
+    convert::Infallible,
+    io,
+    net::SocketAddr,
+    ops::RangeTo,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
 };
-use tokio::io::AsyncWriteExt as _;
 use tokio::sync::RwLock;
+use tokio::{io::AsyncWriteExt as _, time::timeout};
 use tokio::{io::BufReader, net::TcpStream};
 use tokio_util::io::{ReaderStream, StreamReader};
 use tower::{Layer, Service};
@@ -64,7 +86,20 @@ impl Service<Request<Body>> for ProxyService {
             &self.targets[rand::random_range(0..self.targets.len())],
             req.uri(),
         );
-        Box::pin(async move { Ok(fetch_url(uri, req).await.unwrap()) })
+        Box::pin(async move {
+            match fetch_url(uri.clone(), req).await {
+                Ok(resp) => Ok(resp),
+
+                Err(err) => {
+                    log::warn!("proxy upstream error: {:?} {}", uri, err);
+                    let resp = Response::builder()
+                        .status(http::StatusCode::BAD_GATEWAY)
+                        .body(Body::from("Bad Gateway"))
+                        .unwrap();
+                    Ok(resp)
+                }
+            }
+        })
     }
 }
 
@@ -105,6 +140,7 @@ impl<S> Layer<S> for ProxyLayer {
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 256)]
 async fn main() {
+    init_log4rs_rolling("./log", 200, 3);
     let config = Config::parse();
     let cfg = Arc::new(config.clone());
 
@@ -193,7 +229,11 @@ async fn fetch_url(
     let stream = TcpStream::connect(addr).await?;
     let io = TokioIo::new(stream);
 
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+    let (mut sender, conn) = timeout(
+        Duration::from_secs(10),
+        hyper::client::conn::http1::handshake(io),
+    )
+    .await??;
     tokio::task::spawn(async move { if let Err(_) = conn.await {} });
 
     let mut req_builder = Request::builder().uri(url.path_and_query().unwrap().as_str());
@@ -213,6 +253,7 @@ async fn fetch_url(
         if let Some(length) = req_builder.headers_mut().unwrap().remove(CUSTOM_LENGTH) {
             req_builder = req_builder.header(CONTENT_LENGTH, length);
         }
+
         req_builder.body(maybe_decompress_body(
             &req.method().clone(),
             req.into_body(),
@@ -231,15 +272,67 @@ async fn fetch_url(
         req2
     };
 
-    let mut res = sender.send_request(req0).await?;
-    // println!("resp headers:{:?}", res.headers());
-    // let mut axum_resp = axum::response::Response::builder().status(res.status());
-    // for (k, v) in res.headers().iter() {
-    //     axum_resp = axum_resp.header(k, v);
-    // }
+    let mut res = timeout(Duration::from_secs(600), sender.send_request(req0)).await??;
+
     let (parts, body_stream) = res.into_parts();
-    let body = Body::from_stream(body_stream.into_data_stream());
+    let mut  data_stream = body_stream.into_data_stream();
+
+    let s = async_stream::stream! {
+        loop {
+            match tokio::time::timeout(
+                Duration::from_secs(60),
+                data_stream.next(),
+            ).await {
+                Ok(Some(chunk)) => {
+                    yield chunk.map_err(|e| Box::new(e) as  Box<dyn std::error::Error + Send + Sync>);
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    log::warn!("upstream resp body idle timeout: {:?}", url);
+                    yield Err(Box::new(ProxyError::Timeout) as Box<dyn std::error::Error + Send + Sync>);
+                    break;
+                }
+            }
+        }
+    };
+    let body = Body::from_stream(s);
     let axum_resp = axum::response::Response::from_parts(parts, body);
 
     Ok(axum_resp)
+}
+
+pub fn init_log4rs_rolling(log_path: &str, max_size_mb: u64, max_files: u32) {
+    let stdout = ConsoleAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S%.3f)} [{l}] {t} - {m}{n}",
+        )))
+        .build();
+
+    let trigger = SizeTrigger::new(max_size_mb * 1024 * 1024);
+
+    let roller = FixedWindowRoller::builder()
+        .build(&format!("{}.{{}}", log_path), max_files)
+        .unwrap();
+
+    let policy = CompoundPolicy::new(Box::new(trigger), Box::new(roller));
+
+    let rolling = RollingFileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new(
+            "{d(%Y-%m-%d %H:%M:%S%.3f)} [{l}] {t} - {m}{n}",
+        )))
+        .build(log_path, Box::new(policy))
+        .unwrap();
+
+    let config = log4rs::Config::builder()
+        .appender(Appender::builder().build("stdout", Box::new(stdout)))
+        .appender(Appender::builder().build("rolling", Box::new(rolling)))
+        .build(
+            Root::builder()
+                .appender("stdout")
+                .appender("rolling")
+                .build(LevelFilter::Info),
+        )
+        .unwrap();
+
+    log4rs::init_config(config).unwrap();
 }
