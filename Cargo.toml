@@ -10,8 +10,8 @@ tokio-util = "*"
 tower = "0.5"
 hyper = { version = "1", features = ["full", "client"] }
 hyper-util = { version = "0.1", features = ["full"] }
-bytes = "1"
 futures-util = "0.3"
+futures = "0.3.31"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_derive = "1"
@@ -29,3 +29,25 @@ log = "0.4.29"
 log4rs = "*"
 async-stream = "0.3.6"
 thiserror = "2.0.17"
+
+opendal = { version = "0.55", features = ["services-fs"] }
+bytes = "1"
+s3s = { version = "*", features = ["tower"]}
+async-trait = "*"
+
+# 官方核心库，非常稳健
+aws-sigv4 = "1.2"
+aws-credential-types = "1.2"
+# 辅助库
+sha2 = "0.10"
+hex = "0.4"
+time = "0.3"
+http = "1.0"
+regex = "1.10"
+url = "*"
+
+chrono = { version = "*", features = ["serde"]}
+uuid = "*"
+sqlx = { version = "0.8.6", features = ["sqlite", "uuid", "time", "chrono"]}
+strum = "*"
+strum_macros = "*"
