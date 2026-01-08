@@ -9,7 +9,7 @@ use http::StatusCode;
 use uuid::Uuid;
 
 use crate::server::{
-    api::AppState,
+    api::{AppState, Resp, err_resp},
     application::resource::{CreateResourceRequest, SearchQuery, UpdateResourceRequest},
 };
 
@@ -18,8 +18,8 @@ pub async fn create_resource(
     Json(payload): Json<CreateResourceRequest>,
 ) -> impl IntoResponse {
     match state.resource_service.create(payload).await {
-        Ok(resource) => (StatusCode::OK, Json(resource)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(resource) => Json(Resp::ok(resource)).into_response(),
+        Err(e) => Json(err_resp(e.to_string())).into_response(),
     }
 }
 
@@ -28,8 +28,8 @@ pub async fn get_resource(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match state.resource_service.get(id).await {
-        Ok(resource) => Json(resource).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(resource) => Json(Resp::ok(resource)).into_response(),
+        Err(e) => Json(err_resp(e.to_string())).into_response(),
     }
 }
 
@@ -40,9 +40,9 @@ pub async fn search_resources(
     let page = params.page.unwrap_or(1).max(1);
     let size = params.page_size.unwrap_or(10).max(1);
 
-    match state.resource_service.search(params.name, page, size).await {
-        Ok(resources) => Json(resources).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    match state.resource_service.search(params.name, params.kind, page, size).await {
+        Ok(resources) => Json(Resp::ok(resources)).into_response(),
+        Err(e) => Json(err_resp(e.to_string())).into_response(),
     }
 }
 
@@ -52,8 +52,8 @@ pub async fn update_resource(
     Json(payload): Json<UpdateResourceRequest>,
 ) -> impl IntoResponse {
     match state.resource_service.update(id, payload).await {
-        Ok(resource) => Json(resource).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(resource) => Json(Resp::ok(resource)).into_response(),
+        Err(e) => Json(err_resp(e.to_string())).into_response(),
     }
 }
 
@@ -62,7 +62,7 @@ pub async fn delete_resource(
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
     match state.resource_service.delete(id).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(_) => Json(Resp::ok(())).into_response(),
+        Err(e) => Json(err_resp(e.to_string())).into_response(),
     }
 }

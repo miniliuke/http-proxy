@@ -210,7 +210,7 @@ export function DataTable<TData, TValue>({
                   className="border-zinc-200 dark:border-zinc-800"
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-3">
+                    <TableCell key={cell.id} className="py-3 text-left">
                       {flexRender(
                         cell.column.columnDef.cell,
                         cell.getContext(),

@@ -9,14 +9,17 @@ import {
   ChevronRight,
   Search,
   Box,
+  Github, // 新增图标
+  BookOpen, // 新增图标用于文档/wiki感
+  GitFork,  // 新增图标
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Checkbox } from "@/components/ui/checkbox";
 
+// 保持原有逻辑，但名称和图标可以稍微调整以适配风格（此处保留原名称以便理解映射）
 const menuItems = [
   { name: "控制台主页", icon: LayoutDashboard, path: "/" },
   { name: "计算资源 (EC2)", icon: Cloud, path: "/ec2" },
@@ -25,40 +28,35 @@ const menuItems = [
   { name: "安全与身份 (IAM)", icon: ShieldCheck, path: "/iam" },
 ];
 
-const AWSLayout = () => {
+const GitHubLayout = () => {
   const location = useLocation();
 
   return (
-    <div className="flex h-screen w-full bg-[#f2f3f3] text-[#232f3e] overflow-hidden">
-      {/* 侧边栏 */}
-      <aside className="w-64 flex flex-col bg-white border-r border-gray-200 shadow-sm">
-        {/* Logo 区 */}
-        <div className="p-4 flex items-center gap-2">
-          <div className="w-8 h-8 bg-[#ff9900] rounded flex items-center justify-center">
-            <Cloud className="text-white w-5 h-5" />
+    <div className="flex h-screen w-full bg-white text-[#24292f] overflow-hidden font-sans">
+      {/* 侧边栏：GitHub 风格通常侧边栏是浅灰色的 (#f6f8fa) */}
+      <aside className="w-72 flex flex-col bg-[#f6f8fa] border-r border-[#d0d7de]">
+        
+        {/* Logo / 顶部上下文区 */}
+        <div className="px-4 py-5 flex items-center gap-3">
+          <div className="w-8 h-8 bg-[#24292f] text-white rounded-full flex items-center justify-center">
+            <Github className="w-5 h-5" />
           </div>
-          <span className="font-bold text-lg tracking-tight">Console</span>
-        </div>
-
-        {/* 搜索框 (AWS 风格常用) */}
-        <div className="px-4 mb-4">
-          <div className="relative">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="查找服务"
-              className="pl-8 bg-[#fafafa] border-gray-300 focus-visible:ring-[#ff9900]"
-            />
+          <div className="flex flex-col">
+            <span className="font-semibold text-sm leading-tight">DevOps-Platform</span>
+            <span className="text-xs text-[#57606a]">Enterprise</span>
           </div>
         </div>
 
-        <Separator className="opacity-50" />
+        <Separator className="bg-[#d0d7de] mx-4 w-auto mb-2 opacity-60" />
 
         {/* 导航区 */}
-        <ScrollArea className="flex-1 px-3 py-4">
-          <div className="space-y-1">
-            <p className="px-2 mb-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-              常用服务
-            </p>
+        <ScrollArea className="flex-1 px-3 py-2">
+          <div className="space-y-0.5">
+            <div className="px-3 py-2 flex items-center justify-between group cursor-pointer hover:bg-[#eaeef2] rounded-md mb-2 transition-colors">
+                 <span className="text-xs font-semibold text-[#24292f]">Repositories</span>
+                 <BookOpen className="w-3.5 h-3.5 text-[#57606a]" />
+            </div>
+
             {menuItems.map((item) => {
               const isActive = location.pathname === item.path;
               return (
@@ -66,54 +64,58 @@ const AWSLayout = () => {
                   <Button
                     variant="ghost"
                     className={cn(
-                      "w-full justify-start gap-3 px-2 py-1.5 h-9 font-normal transition-colors",
+                      "w-full justify-start gap-3 px-3 py-1.5 h-8 font-normal transition-all rounded-md mb-1",
                       isActive
-                        ? "bg-[#f1faff] text-[#0071ad] hover:bg-[#f1faff]"
-                        : "hover:bg-gray-100 text-[#444]",
+                        ? "bg-[#eaeef2] text-[#24292f] font-semibold shadow-sm border border-[#d0d7de]/50" 
+                        : "text-[#57606a] hover:bg-[#eaeef2] hover:text-[#24292f]",
                     )}
                   >
                     <item.icon
                       className={cn(
                         "w-4 h-4",
-                        isActive ? "text-[#0071ad]" : "text-gray-500",
+                        isActive ? "text-[#24292f]" : "text-[#57606a]",
                       )}
                     />
-                    <span className="flex-1 text-left text-sm">
+                    <span className="flex-1 text-left text-[14px]">
                       {item.name}
                     </span>
-                    {isActive && (
-                      <div className="w-1 h-4 bg-[#0071ad] rounded-full" />
-                    )}
                   </Button>
                 </Link>
               );
             })}
           </div>
 
-          <div className="mt-8 space-y-1">
-            <p className="px-2 mb-2 text-[11px] font-semibold text-gray-500 uppercase tracking-wider">
-              管理
+          <div className="mt-6 space-y-0.5">
+            <p className="px-3 mb-2 text-xs font-semibold text-[#57606a]">
+              Settings
             </p>
             <Button
               variant="ghost"
-              className="w-full justify-start gap-3 px-2 h-9 font-normal text-gray-600 hover:bg-gray-100"
+              className="w-full justify-start gap-3 px-3 h-8 font-normal text-[#57606a] hover:bg-[#eaeef2] hover:text-[#24292f] rounded-md"
             >
               <Settings className="w-4 h-4" />
-              <span className="text-sm">设置与首选项</span>
+              <span className="text-[14px]">Configuration</span>
             </Button>
           </div>
         </ScrollArea>
 
-        {/* 侧边栏底部 */}
-        <div className="p-4 border-t border-gray-200 bg-gray-50/50">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-[10px] font-bold">
-              ADMIN
+        {/* 侧边栏底部：用户卡片 */}
+        <div className="p-4 border-t border-[#d0d7de] bg-white">
+          <div className="flex items-center gap-3 group cursor-pointer">
+            <div className="w-8 h-8 rounded-full border border-[#d0d7de] overflow-hidden">
+                <img 
+                    src="https://github.com/github.png" 
+                    alt="User" 
+                    className="w-full h-full object-cover"
+                />
             </div>
             <div className="flex-1 overflow-hidden">
-              <p className="text-xs font-semibold truncate">Root-User</p>
-              <p className="text-[10px] text-gray-500 truncate">
-                Account: 1234-5678
+              <p className="text-sm font-semibold text-[#24292f] group-hover:text-[#0969da] transition-colors">
+                @root-user
+              </p>
+              <p className="text-xs text-[#57606a] truncate flex items-center gap-1">
+                 <span className="w-2 h-2 bg-green-500 rounded-full inline-block"></span>
+                 Online
               </p>
             </div>
           </div>
@@ -121,21 +123,37 @@ const AWSLayout = () => {
       </aside>
 
       {/* 主体内容区 */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* 内容溢出容器 */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden bg-white">
         <ScrollArea className="flex-1">
-          <div className="p-8 max-w-7xl mx-auto w-full">
-            {/* 页面标题占位 */}
-            <div className="mb-6">
-              <nav className="flex text-sm text-gray-500 gap-2 items-center mb-2">
-                <span>服务</span>
-                <ChevronRight className="w-3 h-3" />
-                <span className="text-gray-900 font-medium">概览</span>
+          <div className="p-8 max-w-[1280px] mx-auto w-full">
+            {/* 面包屑导航 (GitHub 风格) */}
+            <div className="mb-6 border-b border-[#d0d7de] pb-4">
+              <nav className="flex text-sm items-center gap-1">
+                <span className="text-[#0969da] hover:underline cursor-pointer">root-user</span>
+                <span className="text-[#57606a]">/</span>
+                <span className="text-[#0969da] hover:underline cursor-pointer font-semibold">devops-console</span>
+                <span className="ml-2 px-2 py-0.5 rounded-full border border-[#d0d7de] text-xs text-[#57606a] font-medium">Public</span>
               </nav>
             </div>
 
             {/* 真正渲染子路由的地方 */}
-            <div className="animate-in fade-in duration-500">
+            <div className="animate-in fade-in duration-300">
+               {/* 模拟一个 GitHub 风格的 Tab 栏 */}
+                <div className="flex gap-6 mb-6 border-b border-[#d0d7de] text-sm">
+                    <div className="pb-2 border-b-2 border-[#fd8c73] font-semibold text-[#24292f] flex items-center gap-2">
+                        <Box className="w-4 h-4"/>
+                        Overview
+                    </div>
+                    <div className="pb-2 cursor-pointer text-[#57606a] hover:text-[#24292f] hover:border-b-2 hover:border-[#d0d7de] transition-all flex items-center gap-2">
+                        <GitFork className="w-4 h-4"/>
+                        Activity
+                    </div>
+                    <div className="pb-2 cursor-pointer text-[#57606a] hover:text-[#24292f] hover:border-b-2 hover:border-[#d0d7de] transition-all flex items-center gap-2">
+                        <Settings className="w-4 h-4"/>
+                        Settings
+                    </div>
+                </div>
+
               <Outlet />
             </div>
           </div>
@@ -145,4 +163,4 @@ const AWSLayout = () => {
   );
 };
 
-export default AWSLayout;
+export default GitHubLayout;

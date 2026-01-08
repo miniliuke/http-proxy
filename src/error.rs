@@ -6,7 +6,7 @@ use thiserror::Error;
 pub enum ProxyError {
     #[error("io error")]
     IO(#[from] io::Error),
-    #[error("sqlx error")]
+    #[error("sqlx error: {0}")]
     SQLX(#[from] sqlx::Error),
     #[error("hyper error")]
     Hyper(#[from] hyper::Error),

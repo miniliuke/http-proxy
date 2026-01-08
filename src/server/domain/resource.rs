@@ -13,6 +13,8 @@ use crate::error::ProxyError;
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")] // API JSON中使用: DATABASE, API_GATEWAY
 pub enum ResourceType {
     S3,
+    Proxy,
+    SFTP,
 }
 
 impl TryFrom<String> for ResourceType {
@@ -32,7 +34,6 @@ pub struct Resource {
     #[sqlx(try_from = "String")]
     pub kind: ResourceType,
     pub config: String,
-    pub version: i32,
     pub created_at: DateTime<Utc>,
 }
 
@@ -44,7 +45,6 @@ impl Resource {
             name,
             kind: resource_type,
             config,
-            version: 1, // 初始版本
             created_at: Utc::now(),
         }
     }
@@ -61,6 +61,7 @@ pub trait ResourceRepository: Send + Sync {
     async fn search(
         &self,
         name_query: Option<String>,
+        kind: Option<ResourceType>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Resource>>;

@@ -25,6 +25,7 @@ pub struct UpdateResourceRequest {
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub name: Option<String>,
+    pub kind: Option<ResourceType>,
     pub page: Option<i64>,
     pub page_size: Option<i64>,
 }
@@ -54,11 +55,12 @@ impl ResourceService {
     pub async fn search(
         &self,
         name: Option<String>,
+        kind: Option<ResourceType>,
         page: i64,
         size: i64,
     ) -> Result<Vec<Resource>, ProxyError> {
         let offset = (page - 1) * size;
-        self.repo.search(name, size, offset).await
+        self.repo.search(name, kind,size, offset).await
     }
 
     pub async fn update(&self, id: Uuid, req: UpdateResourceRequest) -> Result<(), ProxyError> {

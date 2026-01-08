@@ -2,218 +2,148 @@
 
 import * as React from "react";
 import { type ColumnDef } from "@tanstack/react-table";
-import {
-  ArrowDown,
-  ArrowRight,
-  ArrowUp,
-  CheckCircle2,
-  Circle,
-  HelpCircle,
-  Timer,
-  XCircle,
-} from "lucide-react";
-
+import { ResourceType, type Resource } from "@/types/api";
+import { resourceApi } from "@/api/resource";
+import { DataTable } from "@/components/DataTable";
 import { Badge } from "@/components/ui/badge";
-import { Checkbox } from "@/components/ui/checkbox";
-import { DataTable, type DataTableFilterField } from "@/components/DataTable"; // 假设你的 DataTable 在这里
+import { Button } from "@/components/ui/button"; // 假设你有 Button 组件
+import { format } from "date-fns";
+import { Copy, Edit, MoreHorizontal, Trash2 } from "lucide-react"; // 引入删除图标
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 
-// --- 1. 类型定义 ---
-export type Task = {
-  id: string;
-  code: string;
-  title: string;
-  status: "todo" | "in-progress" | "done" | "canceled";
-  label: "bug" | "feature" | "documentation";
-  priority: "low" | "medium" | "high";
-};
+export default function ResourcePage() {
+  const [data, setData] = React.useState<Resource[]>([]);
+  const [loading, setLoading] = React.useState(true);
 
-// --- 2. 模拟数据 ---
-const data: Task[] = [
-  {
-    id: "TASK-8782",
-    code: "TASK-8782",
-    title: "你无法压缩 bin/ 目录下的文件",
-    status: "in-progress",
-    label: "bug",
-    priority: "high",
-  },
-  {
-    id: "TASK-7878",
-    code: "TASK-7878",
-    title: "我们需要重写整个鉴权系统",
-    status: "todo",
-    label: "feature",
-    priority: "medium",
-  },
-  {
-    id: "TASK-7839",
-    code: "TASK-7839",
-    title: "更新文档中的 API 参考部分",
-    status: "done",
-    label: "documentation",
-    priority: "low",
-  },
-  {
-    id: "TASK-5562",
-    code: "TASK-5562",
-    title: "添加黑暗模式支持",
-    status: "todo",
-    label: "feature",
-    priority: "high",
-  },
-  {
-    id: "TASK-8686",
-    code: "TASK-8686",
-    title: "修复登录页面的对齐问题",
-    status: "canceled",
-    label: "bug",
-    priority: "low",
-  },
-];
+  // 1. 定义加载数据的方法，方便在删除后重新刷新列表
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const response = await resourceApi.list({ page: 1, page_size: 10 });
+      setData(response);
+    } catch (error) {
+      console.error("加载资源失败:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-// --- 3. 辅助配置（用于图标和标签映射） ---
-const statuses = [
-  { value: "todo", label: "待办", icon: Circle },
-  { value: "in-progress", label: "进行中", icon: Timer },
-  { value: "done", label: "已完成", icon: CheckCircle2 },
-  { value: "canceled", label: "已取消", icon: XCircle },
-];
+  // 2. 删除处理函数
+  const onDelete = async (id: string) => {
+    if (!confirm("确定要删除该资源吗？")) return;
 
-const priorities = [
-  { value: "low", label: "低", icon: ArrowDown },
-  { value: "medium", label: "中", icon: ArrowRight },
-  { value: "high", label: "高", icon: ArrowUp },
-];
+    try {
+      await resourceApi.delete(id);
+      // 删除成功后本地过滤掉，或者重新调用 loadData()
+      setData((prev) => prev.filter((item) => item.id !== id));
+      console.log("删除成功");
+    } catch (error) {
+      console.error("删除失败:", error);
+    }
+  };
 
-// --- 4. 列定义 ---
-export const columns: ColumnDef<Task>[] = [
-  {
-    id: "select",
-    header: ({ table }) => (
-      <Checkbox
-        checked={
-          table.getIsAllPageRowsSelected() ||
-          (table.getIsSomePageRowsSelected() && "indeterminate")
-        }
-        onCheckedChange={(value) => table.toggleAllPageRowsSelected(!!value)}
-        aria-label="Select all"
-        className="translate-y-[2px]"
-      />
-    ),
-    cell: ({ row }) => (
-      <Checkbox
-        checked={row.getIsSelected()}
-        onCheckedChange={(value) => row.toggleSelected(!!value)}
-        aria-label="Select row"
-        className="translate-y-[2px]"
-      />
-    ),
-    enableSorting: false,
-    enableHiding: false,
-  },
-  {
-    accessorKey: "code",
-    header: "任务编号",
-    cell: ({ row }) => <div className="w-[80px]">{row.getValue("code")}</div>,
-    enableSorting: false,
-    enableHiding: false,
-  },
-  {
-    accessorKey: "title",
-    header: "标题",
-    cell: ({ row }) => {
-      const label = row.original.label;
-      return (
-        <div className="flex space-x-2">
-          {label && <Badge variant="outline">{label}</Badge>}
-          <span className="max-w-[500px] truncate font-medium">
-            {row.getValue("title")}
-          </span>
-        </div>
-      );
-    },
-  },
-  {
-    accessorKey: "status",
-    header: "状态",
-    cell: ({ row }) => {
-      const status = statuses.find(
-        (status) => status.value === row.getValue("status"),
-      );
-
-      if (!status) return null;
-
-      return (
-        <div className="flex w-[100px] items-center">
-          {status.icon && (
-            <status.icon className="mr-2 h-4 w-4 text-muted-foreground" />
-          )}
-          <span>{status.label}</span>
-        </div>
-      );
-    },
-    // 🔥 关键点：自定义筛选逻辑
-    // 如果不加这个，TanStack Table 默认是精准匹配，多选会导致找不到数据
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id));
-    },
-  },
-  {
-    accessorKey: "priority",
-    header: "优先级",
-    cell: ({ row }) => {
-      const priority = priorities.find(
-        (priority) => priority.value === row.getValue("priority"),
-      );
-
-      if (!priority) return null;
-
-      return (
-        <div className="flex items-center">
-          {priority.icon && (
-            <priority.icon className="mr-2 h-4 w-4 text-muted-foreground" />
-          )}
-          <span>{priority.label}</span>
-        </div>
-      );
-    },
-    // 🔥 关键点：同上，必须包含此逻辑
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id));
-    },
-  },
-];
-
-// --- 5. 页面组件 ---
-export default function TaskPage() {
-  // 定义需要显示的筛选器
-  const filterFields: DataTableFilterField<Task>[] = [
+  const columns: ColumnDef<Resource>[] = [
     {
-      label: "状态",
-      value: "status",
-      options: statuses,
+      accessorKey: "id",
+      header: "ID",
+      cell: ({ row }) => <span className="font-mono text-xs">{row.original.id}</span>,
     },
     {
-      label: "优先级",
-      value: "priority",
-      options: priorities,
+      accessorKey: "name",
+      header: "资源名称",
+    },
+    {
+      accessorKey: "kind",
+      header: "类型",
+      cell: ({ row }) => {
+        const kind = row.getValue("kind") as ResourceType;
+        return (
+          <Badge variant={kind === ResourceType.S3 ? "default" : "outline"}>
+            {kind}
+          </Badge>
+        );
+      },
+    },
+    {
+      accessorKey: "created_at",
+      header: "创建时间",
+      cell: ({ row }) => {
+        return format(new Date(row.original.created_at), "yyyy-MM-dd HH:mm:ss");
+      },
+    },
+    // --- 新增：操作列 ---
+    {
+      id: "actions",
+      header: "操作",
+      cell: ({ row }) => {
+        const resource = row.original;
+
+        return (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" className="h-8 w-8 p-0">
+                <span className="sr-only">打开菜单</span>
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>操作项</DropdownMenuLabel>
+              <DropdownMenuItem
+                onClick={() => navigator.clipboard.writeText(resource.id)}
+              >
+                <Copy className="mr-2 h-4 w-4" />
+                复制 ID
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => console.log("编辑", resource.id)}>
+                <Edit className="mr-2 h-4 w-4" />
+                编辑资源
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                className="text-red-600 focus:text-red-600 focus:bg-red-50"
+                onClick={() => onDelete(resource.id)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                删除资源
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        );
+      },
     },
   ];
 
+  React.useEffect(() => {
+    loadData();
+  }, []);
+
+  const filterFields = [
+    {
+      label: "类型",
+      value: "kind",
+      options: [
+        { label: "S3 Storage", value: ResourceType.S3 },
+        { label: "Proxy", value: ResourceType.PROXY },
+        { label: "SFTP", value: ResourceType.SFTP },
+      ],
+    },
+  ];
+
+  if (loading && data.length === 0) return <div>加载中...</div>;
+
   return (
-    <div className="hidden h-full flex-1 flex-col space-y-8 p-8 md:flex">
-      <div className="flex items-center justify-between space-y-2">
+    <div className="container mx-auto py-10">
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">欢迎回来!</h2>
-          <p className="text-muted-foreground">这里是你本月的任务清单概览。</p>
+          <h2 className="text-2xl font-bold tracking-tight">资源管理</h2>
+          <p className="text-muted-foreground">管理并配置您的资源。</p>
         </div>
       </div>
-
       <DataTable
-        data={data}
         columns={columns}
-        searchKey="title" // 告诉表格搜索哪个字段
-        filters={filterFields} // 传入刚才定义的筛选配置
+        data={data}
+        searchKey="name"
+        filters={filterFields}
       />
     </div>
   );

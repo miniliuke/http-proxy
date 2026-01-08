@@ -5,13 +5,23 @@ use aws_sigv4::sign::v4::{SigningParams, calculate_signature, generate_signing_k
 use axum::extract::Request;
 use axum::middleware::Next;
 use axum::response::Response;
-use axum::routing::any;
+use axum::routing::{any, delete, get, post, put};
 use axum::{Router, middleware};
 use http::StatusCode;
+use http_proxy::server::api::AppState;
+use http_proxy::server::api::resource::{
+    create_resource, delete_resource, get_resource, search_resources, update_resource,
+};
+use http_proxy::server::application::resource::ResourceService;
+use http_proxy::server::infrastructure::resource::SqliteResourceRepository;
 use regex::Regex;
 use s3s::S3;
 use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
+use sqlx::sqlite::SqliteConnectOptions;
+use tower_http::cors::{Any, CorsLayer};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 #[derive(Default)]
@@ -23,16 +33,43 @@ impl S3 for MockS3 {}
 #[tokio::main]
 async fn main() {
     // 业务路由
-    let app = Router::new()
-        .route("/{*wildcard}", any(hello))
-        // 在这里挂载 SigV4 中间件
-        .layer(middleware::from_fn(verify_aws_sigv4));
+        let cors = CorsLayer::new()
+        .allow_origin(Any) // 允许所有来源
+        .allow_methods(Any) // 允许所有 HTTP 方法
+        .allow_headers(Any); // 允许所有头部
+    let mut app = Router::new().route("/{*wildcard}", any(hello));
+
+    let pool = SqlitePool::connect_with(
+        SqliteConnectOptions::default()
+            .create_if_missing(true)
+            .filename("proxy.db"),
+    )
+    .await
+    .unwrap();
+    let repo = Arc::new(SqliteResourceRepository::new(pool));
+    repo.migrate().await.unwrap();
+    let state = Arc::new(AppState {
+        resource_service: ResourceService::new(repo),
+    });
+
+    let api = Router::new()
+        .route("/resource", put(create_resource))
+        .route("/resource/{id}", get(get_resource))
+        .route("/resources", get(search_resources))
+        .route("/resource/{id}", delete(delete_resource))
+        .route("/resource/{id}", post(update_resource))
+        .with_state(state);
+
+    app = app.nest("/api/v1", api)
+    .layer(cors);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
     println!("Listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app.into_make_service())
+        .await
+        .unwrap();
 }
 
 pub async fn hello() -> &'static str {

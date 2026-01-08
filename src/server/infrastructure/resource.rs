@@ -24,11 +24,9 @@ impl SqliteResourceRepository {
             CREATE TABLE IF NOT EXISTS resources (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
+                kind TEXT NOT NULL,
                 config TEXT NOT NULL,
-                version INTEGER NOT NULL DEFAULT 1,
-                created_at DATETIME NOT NULL,
-                updated_at DATETIME NOT NULL
+                created_at DATETIME NOT NULL
             );
             "#,
         )
@@ -44,9 +42,9 @@ impl ResourceRepository for SqliteResourceRepository {
         // SQLite 3.35+ 支持 RETURNING 子句，sqlx 默认支持
         let rec = sqlx::query_as::<_, Resource>(
             r#"
-            INSERT INTO resources (id, name, resource_type, config, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, name, resource_type, config, created_at
+            INSERT INTO resources (id, name, kind, config, created_at)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id, name, kind, config, created_at
             "#,
         )
         .bind(resource.id) // sqlx 会自动将 Uuid 转为 TEXT
@@ -68,7 +66,7 @@ impl ResourceRepository for SqliteResourceRepository {
             .await?;
 
         if let Some(r) = row {
-            let type_str: String = r.try_get("resource_type")?;
+            let type_str: String = r.try_get("kind")?;
             // 如果 resource_type 列在数据库里可能存了脏数据，这里做个容错
 
             let resource_type =
@@ -79,7 +77,6 @@ impl ResourceRepository for SqliteResourceRepository {
                 name: r.try_get("name")?,
                 kind: resource_type,
                 config: r.try_get("config")?,
-                version: r.try_get("version")?,
                 created_at: r.try_get("created_at")?,
             }))
         } else {
@@ -90,6 +87,7 @@ impl ResourceRepository for SqliteResourceRepository {
     async fn search(
         &self,
         name_query: Option<String>,
+        kind: Option<ResourceType>,
         limit: i64,
         offset: i64,
     ) -> Result<Vec<Resource>> {
@@ -110,13 +108,12 @@ impl ResourceRepository for SqliteResourceRepository {
 
         let mut resources = Vec::new();
         for r in rows {
-            let type_str: String = r.try_get("resource_type")?;
+            let type_str: String = r.try_get("kind")?;
             resources.push(Resource {
                 id: r.try_get("id")?,
                 name: r.try_get("name")?,
                 kind: ResourceType::from_str(&type_str).unwrap_or(ResourceType::S3),
                 config: r.try_get("config")?,
-                version: r.try_get("version")?,
                 created_at: r.try_get("created_at")?,
             });
         }
@@ -127,15 +124,14 @@ impl ResourceRepository for SqliteResourceRepository {
         let rec = sqlx::query_as::<_, Resource>(
             r#"
             UPDATE resources
-            SET name = $1, resource_type = $2, config = $3, create_at = $5
-            WHERE id = $6
-            RETURNING id, name, resource_type, config, created_at
+            SET name = $1, kind = $2, config = $3, create_at = $4
+            WHERE id = $5
+            RETURNING id, name, kind, config, created_at
             "#,
         )
         .bind(resource.name)
         .bind(resource.kind.to_string())
         .bind(resource.config)
-        .bind(resource.version)
         .bind(resource.created_at)
         .bind(resource.id)
         .fetch_optional(&self.pool)

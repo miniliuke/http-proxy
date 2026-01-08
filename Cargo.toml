@@ -8,6 +8,10 @@ axum = { version = "0.8", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = "*"
 tower = "0.5"
+tower-http = { version = "*", features = [
+    "cors",
+    "fs",
+]}
 hyper = { version = "1", features = ["full", "client"] }
 hyper-util = { version = "0.1", features = ["full"] }
 futures-util = "0.3"
@@ -48,6 +52,6 @@ url = "*"
 
 chrono = { version = "*", features = ["serde"]}
 uuid = "*"
-sqlx = { version = "0.8.6", features = ["sqlite", "uuid", "time", "chrono"]}
+sqlx = { version = "0.8.6", features = ["sqlite", "uuid", "time", "chrono", "runtime-tokio"]}
 strum = "*"
 strum_macros = "*"
